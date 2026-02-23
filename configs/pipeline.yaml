@@ -1,0 +1,59 @@
+# 流水线配置
+
+# 切分配置
+chunking:
+  chunk_size: 3000  # 中文字符
+  chunk_overlap: 300
+  min_chunk_size: 500
+
+# 抽取配置
+extraction:
+  model: deepseek-chat
+  temperature: 0.1
+  max_tokens: 4096
+  enable_coverage_pass: true  # 是否进行补漏检查
+
+# 标准化配置
+normalization:
+  # 术语映射
+  term_mappings:
+    "batch norm": "BatchNorm"
+    "batch normalization": "BatchNorm"
+    "layer norm": "LayerNorm"
+    "layer normalization": "LayerNorm"
+    "rms norm": "RMSNorm"
+    "attention机制": "Attention"
+    "注意力机制": "Attention"
+    "自注意力": "Self-Attention"
+    "多头注意力": "Multi-Head Attention"
+
+# 去重配置
+deduplication:
+  # 候选召回阈值
+  exact_match: true
+  normalized_match: true
+  fuzzy_threshold: 85  # RapidFuzz相似度阈值
+  embedding_threshold: 0.85  # 向量相似度阈值
+  embedding_top_k: 50  # 向量召回TopK
+
+  # LLM裁决配置
+  use_llm_judge: true
+  confidence_low: 0.55  # 低于此值进入复核
+  confidence_high: 0.80  # 高于此值直接合并
+
+# 分类配置
+classification:
+  model: deepseek-chat
+  temperature: 0.1
+  max_tokens: 1024
+  multi_label: true  # 多标签分类
+  uncertain_threshold: 0.6  # 低于此置信度标记为uncertain
+
+# 输出配置
+output:
+  formats:
+    - markdown
+    - xlsx
+    - jsonl
+  include_evidence: true  # 是否包含证据片段
+  max_evidence_length: 200  # 证据片段最大长度

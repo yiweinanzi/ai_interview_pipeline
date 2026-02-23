@@ -1,0 +1,236 @@
+# AI知识点分类体系
+# 用于对面试问题进行分类
+
+taxonomy:
+  # 机器学习基础
+  ml_foundations:
+    name: 机器学习基础
+    subcategories:
+      supervised:
+        name: 监督学习
+        keywords: [分类, 回归, 监督, 标签]
+      unsupervised:
+        name: 无监督学习
+        keywords: [聚类, 降维, 无监督]
+      semi_supervised:
+        name: 半监督学习
+        keywords: [半监督, 自训练]
+      bias_variance:
+        name: 偏差与方差
+        keywords: [偏差, 方差, 泛化, 过拟合, 欠拟合]
+      regularization:
+        name: 正则化
+        keywords: [L1, L2, 正则, dropout, 正则化]
+      loss_functions:
+        name: 损失函数
+        keywords: [损失, loss, 交叉熵, MSE, CE]
+      optimization:
+        name: 优化器与梯度下降
+        keywords: [优化, SGD, Adam, AdamW, 梯度, 学习率, lr]
+      evaluation:
+        name: 评估指标
+        keywords: [AUC, ROC, F1, 精确率, 召回率, 准确率, precision, recall]
+
+  # 深度学习
+  deep_learning:
+    name: 深度学习
+    subcategories:
+      architecture:
+        name: 网络架构
+        keywords: [MLP, CNN, RNN, LSTM, GRU]
+      normalization:
+        name: 归一化
+        keywords: [BatchNorm, LayerNorm, RMSNorm, BN, LN, 归一化]
+      activation:
+        name: 激活函数
+        keywords: [ReLU, GELU, Swish, SiLU, 激活函数, activation]
+      initialization:
+        name: 参数初始化
+        keywords: [初始化, Xavier, Kaiming]
+      training_tricks:
+        name: 训练技巧
+        keywords: [warmup, 学习率调度, 梯度裁剪, 混合精度]
+
+  # NLP与大模型
+  nlp_llm:
+    name: NLP与大模型
+    subcategories:
+      transformer:
+        name: Transformer架构
+        keywords: [Transformer, Attention, 自注意力, 多头注意力]
+      position_encoding:
+        name: 位置编码
+        keywords: [位置编码, RoPE, ALiBi, PE, positional]
+      pretraining:
+        name: 预训练
+        keywords: [预训练, MLM, NSP, CLM]
+      fine_tuning:
+        name: 微调技术
+        keywords: [微调, SFT, PEFT, LoRA, Prefix, P-tuning]
+      alignment:
+        name: 对齐技术
+        keywords: [RLHF, DPO, PPO, 对齐, 奖励模型, GRPO]
+      rag:
+        name: RAG
+        keywords: [RAG, 检索增强, 向量检索, embedding]
+      inference:
+        name: 推理优化
+        keywords: [量化, KV Cache, vLLM, 推理加速, Flash Attention]
+      agent:
+        name: AI Agent
+        keywords: [Agent, 工具调用, Function Call, ReAct]
+      llm_general:
+        name: 大模型通用
+        keywords: [大模型, LLM, GPT, BERT, 语言模型]
+
+  # 计算机视觉
+  cv:
+    name: 计算机视觉
+    subcategories:
+      detection:
+        name: 目标检测
+        keywords: [检测, YOLO, RCNN, DETR, NMS, IoU]
+      segmentation:
+        name: 图像分割
+        keywords: [分割, 语义分割, 实例分割, mask]
+      classification:
+        name: 图像分类
+        keywords: [分类, ResNet, ViT, 图像分类]
+      generative:
+        name: 图像生成
+        keywords: [扩散, diffusion, GAN, VAE, 生成, Stable Diffusion]
+      multimodal:
+        name: 多模态
+        keywords: [多模态, CLIP, BLIP, 图文, 视觉语言]
+
+  # 推荐系统
+  recsys:
+    name: 推荐系统
+    subcategories:
+      recall:
+        name: 召回
+        keywords: [召回, 双塔, 向量召回, 协同过滤]
+      ranking:
+        name: 排序
+        keywords: [精排, 粗排, CTR, CVR, DIN, DeepFM]
+      multi_task:
+        name: 多任务学习
+        keywords: [多任务, MMOE, PLE, ESMM]
+      cold_start:
+        name: 冷启动
+        keywords: [冷启动, 新用户, 新物品]
+      feature_eng:
+        name: 特征工程
+        keywords: [特征, 特征工程, 特征交叉]
+
+  # 搜索与广告
+  search_ads:
+    name: 搜索与广告
+    subcategories:
+      search:
+        name: 搜索算法
+        keywords: [搜索, Query, 倒排, BM25]
+      ads:
+        name: 广告算法
+        keywords: [广告, 竞价, OCPC, oCPM]
+
+  # 数据工程
+  data_engineering:
+    name: 数据工程
+    subcategories:
+      data_cleaning:
+        name: 数据清洗
+        keywords: [数据清洗, 异常检测, 去噪]
+      sampling:
+        name: 采样与样本构造
+        keywords: [采样, 负采样, 样本不平衡]
+      leakage:
+        name: 数据泄漏
+        keywords: [数据泄漏, 泄漏, 特征穿越]
+
+  # 系统设计
+  ml_system:
+    name: 机器学习系统
+    subcategories:
+      distributed:
+        name: 分布式训练
+        keywords: [分布式, ZeRO, DeepSpeed, Megatron, 并行]
+      deployment:
+        name: 模型部署
+        keywords: [部署, 推理服务, TensorRT, ONNX]
+      monitoring:
+        name: 监控与维护
+        keywords: [监控, A/B测试, 回滚]
+
+  # 编程与算法
+  coding:
+    name: 编程与算法
+    subcategories:
+      python:
+        name: Python
+        keywords: [Python, python]
+      cpp:
+        name: C++
+        keywords: [C++, cpp]
+      sql:
+        name: SQL
+        keywords: [SQL, sql, 数据库]
+      algorithm:
+        name: 算法题
+        keywords: [手撕, 算法题, LeetCode, 动态规划, 贪心]
+
+  # 项目与行为
+  project_behavior:
+    name: 项目与行为面试
+    subcategories:
+      project_deep_dive:
+        name: 项目深挖
+        keywords: [项目, 实习, 经历]
+      system_design:
+        name: 系统设计
+        keywords: [系统设计, 架构设计, 场景题]
+      behavior:
+        name: 行为面试
+        keywords: [HR面, 职业规划, 团队协作]
+
+# 关键词到一级分类的直接映射（快速分类用）
+keyword_to_category:
+  # NLP/LLM
+  "Transformer": nlp_llm
+  "Attention": nlp_llm
+  "BERT": nlp_llm
+  "GPT": nlp_llm
+  "LLM": nlp_llm
+  "大模型": nlp_llm
+  "LoRA": nlp_llm
+  "RAG": nlp_llm
+  "RLHF": nlp_llm
+  "DPO": nlp_llm
+
+  # CV
+  "CNN": cv
+  "YOLO": cv
+  "检测": cv
+  "分割": cv
+  "图像": cv
+  "视觉": cv
+  "扩散": cv
+
+  # 推荐系统
+  "推荐": recsys
+  "召回": recsys
+  "CTR": recsys
+  "精排": recsys
+  "DIN": recsys
+
+  # 深度学习基础
+  "BatchNorm": deep_learning
+  "LayerNorm": deep_learning
+  "激活函数": deep_learning
+  "梯度": deep_learning
+
+  # 编程
+  "手撕": coding
+  "算法题": coding
+  "LeetCode": coding
+  "SQL": coding

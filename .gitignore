@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Virtual env
+.venv/
+venv/
+
+# Local env
+.env
+
+# Runtime artifacts
+logs/
+
+# Data artifacts (generated)
+data/staging/
+data/processed/
+data/output/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+
+# Temporary files
+=4.45.0

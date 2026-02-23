@@ -1,0 +1,43 @@
+"""模型模块"""
+
+from src.models.schemas import (
+    AtomicQuestion,
+    CanonicalQuestion,
+    CandidateSource,
+    ClassifiedQuestion,
+    ClassificationResult,
+    CoverageAudit,
+    CoverageCheckResult,
+    DedupeJudgeResult,
+    DedupePair,
+    ExtractedQuestion,
+    ExtractionResult,
+    ExtractPass,
+    InterviewRecord,
+    MissedQuestion,
+    QuestionType,
+    RunAudit,
+    SourceType,
+    TextChunk,
+)
+
+__all__ = [
+    "AtomicQuestion",
+    "CanonicalQuestion",
+    "CandidateSource",
+    "ClassifiedQuestion",
+    "ClassificationResult",
+    "CoverageAudit",
+    "CoverageCheckResult",
+    "DedupeJudgeResult",
+    "DedupePair",
+    "ExtractedQuestion",
+    "ExtractionResult",
+    "ExtractPass",
+    "InterviewRecord",
+    "MissedQuestion",
+    "QuestionType",
+    "RunAudit",
+    "SourceType",
+    "TextChunk",
+]

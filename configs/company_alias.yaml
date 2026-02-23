@@ -1,0 +1,210 @@
+# 公司名称归一化字典
+# 用于将各种公司名称变体映射到统一名称
+
+mappings:
+  # 字节跳动
+  字节跳动: 字节跳动
+  字节: 字节跳动
+  bytedance: 字节跳动
+  ByteDance: 字节跳动
+  抖音: 字节跳动
+  tiktok: 字节跳动
+  TikTok: 字节跳动
+  今日头条: 字节跳动
+  头条: 字节跳动
+  飞书: 字节跳动
+  懂车帝: 字节跳动
+
+  # 阿里巴巴
+  阿里巴巴: 阿里巴巴
+  阿里: 阿里巴巴
+  alibaba: 阿里巴巴
+  Alibaba: 阿里巴巴
+  阿里云: 阿里巴巴
+  达摩院: 阿里巴巴
+  通义实验室: 阿里巴巴
+  阿里妈妈: 阿里巴巴
+  蚂蚁集团: 蚂蚁集团
+  蚂蚁金服: 蚂蚁集团
+  蚂蚁: 蚂蚁集团
+  ant: 蚂蚁集团
+  Ant: 蚂蚁集团
+  支付宝: 蚂蚁集团
+
+  # 腾讯
+  腾讯: 腾讯
+  tencent: 腾讯
+  Tencent: 腾讯
+  微信: 腾讯
+  QQ: 腾讯
+  腾讯云: 腾讯
+  混元: 腾讯
+  混元大模型: 腾讯
+
+  # 美团
+  美团: 美团
+  meituan: 美团
+  Meituan: 美团
+  大众点评: 美团
+  点评: 美团
+
+  # 快手
+  快手: 快手
+  kuaishou: 快手
+  Kuaishou: 快手
+
+  # 百度
+  百度: 百度
+  baidu: 百度
+  Baidu: 百度
+  文心一言: 百度
+  文心: 百度
+
+  # 网易
+  网易: 网易
+  netease: 网易
+  NetEase: 网易
+  网易云音乐: 网易
+  网易游戏: 网易
+  网易互娱: 网易
+  伏羲: 网易
+  有道: 网易
+
+  # 小红书
+  小红书: 小红书
+  xiaohongshu: 小红书
+  Xiaohongshu: 小红书
+  XHS: 小红书
+  xhs: 小红书
+  RED: 小红书
+
+  # 华为
+  华为: 华为
+  huawei: 华为
+  Huawei: 华为
+  华为云: 华为
+  盘古: 华为
+  盘古大模型: 华为
+
+  # 京东
+  京东: 京东
+  jd: 京东
+  JD: 京东
+  Jd: 京东
+  京东物流: 京东
+  京东零售: 京东
+
+  # 拼多多
+  拼多多: 拼多多
+  pdd: 拼多多
+  PDD: 拼多多
+  Pinduoduo: 拼多多
+
+  # B站
+  B站: 哔哩哔哩
+  b站: 哔哩哔哩
+  哔哩哔哩: 哔哩哔哩
+  bilibili: 哔哩哔哩
+  Bilibili: 哔哩哔哩
+
+  # 小米
+  小米: 小米
+  xiaomi: 小米
+  Xiaomi: 小米
+  小爱: 小米
+  小爱同学: 小米
+
+  # 知乎
+  知乎: 知乎
+  zhihu: 知乎
+  Zhihu: 知乎
+
+  # 携程
+  携程: 携程
+  ctrip: 携程
+  Ctrip: 携程
+  Trip: 携程
+
+  # OPPO
+  OPPO: OPPO
+  oppo: OPPO
+  Oppo: OPPO
+
+  # VIVO
+  VIVO: VIVO
+  vivo: VIVO
+  Vivo: VIVO
+
+  # 联想
+  联想: 联想
+  lenovo: 联想
+  Lenovo: 联想
+
+  # 荣耀
+  荣耀: 荣耀
+  honor: 荣耀
+  Honor: 荣耀
+
+  # 商汤
+  商汤: 商汤
+  sensetime: 商汤
+  SenseTime: 商汤
+
+  # 科大讯飞
+  科大讯飞: 科大讯飞
+  讯飞: 科大讯飞
+  iflytek: 科大讯飞
+  iFlytek: 科大讯飞
+  飞星计划: 科大讯飞
+
+  # 滴滴
+  滴滴: 滴滴
+  didi: 滴滴
+  Didi: 滴滴
+
+  # 虾皮
+  虾皮: 虾皮
+  shopee: 虾皮
+  Shopee: 虾皮
+
+  # 其他
+  其他: 其他
+  else: 其他
+  通用: 通用题库
+  通用题库: 通用题库
+
+# 从目录名提取公司的正则模式
+dir_patterns:
+  - pattern: "nowcoder_(.+)_suanfa"
+    group: 1
+  - pattern: "(.+)_suanfa"
+    group: 1
+  - pattern: "(.+)_algorithm"
+    group: 1
+
+# 目录名到公司名的直接映射
+dir_to_company:
+  bytedance: 字节跳动
+  alibaba: 阿里巴巴
+  tencent: 腾讯
+  meituan: 美团
+  kuaishou: 快手
+  baidu: 百度
+  wangyi: 网易
+  xiaohongshu: 小红书
+  huawei: 华为
+  jingdong: 京东
+  pdd: 拼多多
+  bilibili: 哔哩哔哩
+  xiaomi: 小米
+  zhihu: 知乎
+  xiecheng: 携程
+  oppo: OPPO
+  vivo: VIVO
+  lianxiang: 联想
+  mayi: 蚂蚁集团
+  rongyao: 荣耀
+  shangtang: 商汤
+  kedaxunfei: 科大讯飞
+  else: 其他
+  "04-interview": 通用题库
