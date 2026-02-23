@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     deepseek_reasoner_model: str = "deepseek-reasoner"
 
+    # 兜底LLM配置（当主LLM失败时自动切换）
+    llm_fallback_enabled: bool = False
+    llm_fallback_api_key: str = ""
+    llm_fallback_base_url: str = "https://api.deepseek.com"
+    llm_fallback_model: str = "deepseek-chat"
+    llm_fallback_reasoner_model: str = "deepseek-reasoner"
+
     # 向量嵌入配置
     embedding_model: str = "BAAI/bge-m3"
     embedding_device: Literal["cuda", "cpu"] = "cuda"

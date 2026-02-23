@@ -69,6 +69,13 @@ DEEPSEEK_REASONER_MODEL=Qwen3-8B
 
 EMBEDDING_MODEL=../model/bge-m3
 EMBEDDING_DEVICE=cuda
+
+# 可选：主LLM失败时自动回退到DeepSeek
+LLM_FALLBACK_ENABLED=true
+LLM_FALLBACK_API_KEY=<your-deepseek-key>
+LLM_FALLBACK_BASE_URL=https://api.deepseek.com
+LLM_FALLBACK_MODEL=deepseek-chat
+LLM_FALLBACK_REASONER_MODEL=deepseek-reasoner
 ```
 
 ## 启动本地 vLLM

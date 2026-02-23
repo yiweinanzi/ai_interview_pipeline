@@ -50,10 +50,27 @@ class DeepSeekClient:
             timeout=httpx.Timeout(self.timeout, connect=60.0),
         )
 
+        # 失败兜底：主LLM失败时自动切换到fallback（通常是DeepSeek线上API）
+        self.fallback_enabled = settings.llm_fallback_enabled
+        self.fallback_api_key = settings.llm_fallback_api_key
+        self.fallback_base_url = settings.llm_fallback_base_url
+        self.fallback_model = settings.llm_fallback_model
+        self.fallback_reasoner_model = settings.llm_fallback_reasoner_model
+        self._fallback_client: OpenAI | None = None
+        if self.fallback_enabled and self.fallback_api_key:
+            self._fallback_client = OpenAI(
+                api_key=self.fallback_api_key,
+                base_url=self.fallback_base_url,
+                timeout=httpx.Timeout(self.timeout, connect=60.0),
+            )
+        elif self.fallback_enabled:
+            logger.warning("已启用fallback但未配置LLM_FALLBACK_API_KEY，fallback不可用")
+
         # 统计信息
         self.total_calls = 0
         self.total_tokens = 0
         self.cache_hits = 0
+        self.fallback_calls = 0
         self.errors: dict[str, int] = {}
 
     @retry(
@@ -71,53 +88,91 @@ class DeepSeekClient:
         use_reasoner: bool = False,
     ) -> str:
         """底层API调用"""
-        model = self.deepseek_reasoner_model if use_reasoner else self.model
-        if use_reasoner:
-            model = settings.deepseek_reasoner_model
-        else:
-            model = self.model
+        return self._chat_with_client(
+            client=self._client,
+            model=self.deepseek_reasoner_model if use_reasoner else self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+            is_fallback=False,
+        )
 
+    @retry(
+        stop=stop_after_attempt(2),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((httpx.TimeoutException, ConnectionError)),
+    )
+    def _call_api_fallback(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 4096,
+        json_mode: bool = True,
+        use_reasoner: bool = False,
+    ) -> str:
+        if self._fallback_client is None:
+            raise RuntimeError("fallback client is not configured")
+
+        return self._chat_with_client(
+            client=self._fallback_client,
+            model=self.fallback_reasoner_model if use_reasoner else self.fallback_model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_mode=json_mode,
+            is_fallback=True,
+        )
+
+    def _chat_with_client(
+        self,
+        *,
+        client: OpenAI,
+        model: str,
+        messages: list[dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+        json_mode: bool,
+        is_fallback: bool,
+    ) -> str:
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
         try:
             self.total_calls += 1
-            response = self._client.chat.completions.create(**kwargs)
+            if is_fallback:
+                self.fallback_calls += 1
 
-            # 统计token使用
+            response = client.chat.completions.create(**kwargs)
+
             if response.usage:
                 self.total_tokens += response.usage.total_tokens
-                # 检查缓存命中
                 if hasattr(response.usage, "prompt_cache_hit_tokens"):
                     self.cache_hits += response.usage.prompt_cache_hit_tokens
 
             content = response.choices[0].message.content
-
-            # JSON模式下可能返回空内容，需要重试
             if json_mode and not content:
                 logger.warning("JSON模式返回空内容，准备重试")
                 raise ValueError("Empty JSON response")
-
             return content or ""
 
         except Exception as e:
             error_code = getattr(e, "status_code", type(e).__name__)
             self.errors[str(error_code)] = self.errors.get(str(error_code), 0) + 1
 
-            # 4xx错误不重试
             if hasattr(e, "status_code") and 400 <= e.status_code < 500:
                 if e.status_code in (401, 402):
                     logger.error(f"API认证/余额错误: {e}")
                 raise
 
-            logger.error(f"API调用失败: {e}")
+            logger.error(f"{'fallback' if is_fallback else 'primary'} API调用失败: {e}")
             raise
 
     @property
@@ -151,13 +206,25 @@ class DeepSeekClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
-        return self._call_api(
-            messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            json_mode=json_mode,
-            use_reasoner=use_reasoner,
-        )
+        try:
+            return self._call_api(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                json_mode=json_mode,
+                use_reasoner=use_reasoner,
+            )
+        except Exception:
+            if self._fallback_client is not None:
+                logger.warning("主LLM调用失败，切换fallback模型重试")
+                return self._call_api_fallback(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=json_mode,
+                    use_reasoner=use_reasoner,
+                )
+            raise
 
     def call_json(
         self,
@@ -185,38 +252,88 @@ class DeepSeekClient:
         parse_attempts = 3
         last_error: Exception | None = None
         last_content = ""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
 
         for attempt in range(1, parse_attempts + 1):
-            content = self.call(
-                system_prompt,
-                user_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                json_mode=True,
-                use_reasoner=use_reasoner,
-            )
-            last_content = content
+            try:
+                content = self._call_api(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=True,
+                    use_reasoner=use_reasoner,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < parse_attempts:
+                    logger.warning(f"主LLM请求失败，重试中 ({attempt}/{parse_attempts})")
+                continue
 
+            last_content = content
             data = self._try_parse_json(content)
             if data is not None:
-                if response_model:
-                    try:
-                        validated = response_model.model_validate(data)
-                        return validated.model_dump()
-                    except ValidationError as e:
-                        last_error = e
-                else:
-                    return data
-            elif last_error is None:
+                validated = self._validate_json_data(data, response_model)
+                if validated is not None:
+                    return validated
+                last_error = ValueError("JSON结构校验失败")
+            else:
                 last_error = ValueError("JSON解析失败")
 
             if attempt < parse_attempts:
-                logger.warning(f"JSON解析/校验失败，重试中 ({attempt}/{parse_attempts})")
+                logger.warning(f"主LLM JSON解析/校验失败，重试中 ({attempt}/{parse_attempts})")
 
-        logger.error(
-            f"JSON解析失败: {last_error}\n原始内容: {last_content[:500]}"
-        )
+        if self._fallback_client is not None:
+            logger.warning("主LLM多次失败，切换fallback模型")
+            for attempt in range(1, parse_attempts + 1):
+                try:
+                    content = self._call_api_fallback(
+                        messages,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        json_mode=True,
+                        use_reasoner=use_reasoner,
+                    )
+                except Exception as e:
+                    last_error = e
+                    if attempt < parse_attempts:
+                        logger.warning(
+                            f"fallback请求失败，重试中 ({attempt}/{parse_attempts})"
+                        )
+                    continue
+
+                last_content = content
+                data = self._try_parse_json(content)
+                if data is not None:
+                    validated = self._validate_json_data(data, response_model)
+                    if validated is not None:
+                        return validated
+                    last_error = ValueError("fallback JSON结构校验失败")
+                else:
+                    last_error = ValueError("fallback JSON解析失败")
+
+                if attempt < parse_attempts:
+                    logger.warning(
+                        f"fallback JSON解析/校验失败，重试中 ({attempt}/{parse_attempts})"
+                    )
+
+        logger.error(f"JSON解析失败: {last_error}\n原始内容: {last_content[:500]}")
         raise ValueError(f"JSON解析失败: {last_error}") from last_error
+
+    def _validate_json_data(
+        self,
+        data: dict[str, Any],
+        response_model: type[BaseModel] | None,
+    ) -> dict[str, Any] | None:
+        if response_model is None:
+            return data
+        try:
+            validated = response_model.model_validate(data)
+            return validated.model_dump()
+        except ValidationError:
+            return None
 
     def _try_parse_json(self, content: str) -> dict[str, Any] | None:
         """尝试解析JSON，支持对常见格式问题进行清洗"""
@@ -259,6 +376,7 @@ class DeepSeekClient:
         """获取调用统计"""
         return {
             "total_calls": self.total_calls,
+            "fallback_calls": self.fallback_calls,
             "total_tokens": self.total_tokens,
             "cache_hits": self.cache_hits,
             "errors": self.errors,
