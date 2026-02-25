@@ -1,15 +1,18 @@
 """去重模块"""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from datetime import datetime
 import logging
 from pathlib import Path
+import threading
 from typing import Any
 from uuid import UUID
 
 from src.dedupe.candidates import CandidateRecaller
 from src.dedupe.judge import DedupeJudge
-from src.models import AtomicQuestion, CanonicalQuestion
+from src.models import AtomicQuestion, CandidateSource, CanonicalQuestion, DedupePair
+from src.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -57,30 +60,121 @@ def run_dedupe(
     logger.info(f"加载 {len(questions)} 个问题")
 
     # 1. 候选召回
-    recaller = CandidateRecaller(use_embedding=use_embedding)
+    recaller = CandidateRecaller(
+        use_embedding=use_embedding,
+        embedding_threshold=settings.similarity_threshold,
+        embedding_top_k=settings.dedupe_embedding_top_k,
+    )
     candidates = recaller.recall_candidates(questions)
 
     logger.info(f"召回 {len(candidates)} 个候选对")
 
-    # 2. LLM裁决
-    judge = DedupeJudge()
+    # 2. 裁决（规则直判 + 并发LLM）
+    judge = DedupeJudge(
+        confidence_low=settings.dedupe_confidence_low,
+        confidence_high=settings.dedupe_confidence_high,
+    )
     pairs = []
 
     # 构建问题映射
     q_map = {q.atomic_question_id: q for q in questions}
+    llm_candidates: list[tuple[AtomicQuestion, AtomicQuestion, CandidateSource]] = []
+    fast_path_count = 0
 
-    for i, (qid_a, qid_b, source) in enumerate(candidates):
+    # 2.1 exact/normalized 高精度候选走规则直判，减少不必要的LLM调用
+    fast_path_enabled = settings.dedupe_fast_path_exact_normalized
+    for qid_a, qid_b, source in candidates:
         q1 = q_map.get(qid_a)
         q2 = q_map.get(qid_b)
-
         if not q1 or not q2:
             continue
 
-        pair = judge.judge_pair(q1, q2, source)
-        pairs.append(pair)
+        if (
+            fast_path_enabled
+            and source in (CandidateSource.EXACT, CandidateSource.NORMALIZED)
+        ):
+            canonical_text = judge._select_canonical_text([q1, q2], [], {q1.atomic_question_id, q2.atomic_question_id})
+            confidence = 0.99 if source == CandidateSource.EXACT else 0.97
+            pairs.append(
+                DedupePair(
+                    qid_a=q1.atomic_question_id,
+                    qid_b=q2.atomic_question_id,
+                    candidate_source=source,
+                    llm_is_duplicate=True,
+                    llm_confidence=confidence,
+                    llm_reason="规则直判: exact/normalized高精度匹配",
+                    canonical_question_candidate=canonical_text,
+                    review_flag=False,
+                )
+            )
+            fast_path_count += 1
+            continue
 
-        if (i + 1) % 10 == 0:
-            logger.info(f"已裁决 {i + 1}/{len(candidates)} 个候选对")
+        llm_candidates.append((q1, q2, source))
+
+    logger.info(
+        "进入LLM裁决: %s 对 (规则直判 %s 对)",
+        len(llm_candidates),
+        fast_path_count,
+    )
+
+    # 2.2 剩余候选并发LLM裁决
+    llm_judged = 0
+    judge_workers = max(1, settings.dedupe_judge_workers)
+    if llm_candidates:
+        if judge_workers == 1:
+            for i, (q1, q2, source) in enumerate(llm_candidates, 1):
+                pair = judge.judge_pair(q1, q2, source)
+                pairs.append(pair)
+                llm_judged += 1
+                if i % 10 == 0 or i == len(llm_candidates):
+                    logger.info(
+                        "已裁决 %s/%s 个候选对 (fast=%s, llm=%s/%s)",
+                        fast_path_count + i,
+                        len(candidates),
+                        fast_path_count,
+                        i,
+                        len(llm_candidates),
+                    )
+        else:
+            local_ctx = threading.local()
+
+            def get_thread_judge() -> DedupeJudge:
+                j = getattr(local_ctx, "judge", None)
+                if j is None:
+                    j = DedupeJudge(
+                        confidence_low=settings.dedupe_confidence_low,
+                        confidence_high=settings.dedupe_confidence_high,
+                    )
+                    local_ctx.judge = j
+                return j
+
+            def judge_one(item: tuple[AtomicQuestion, AtomicQuestion, CandidateSource]) -> DedupePair:
+                q1, q2, source = item
+                return get_thread_judge().judge_pair(q1, q2, source)
+
+            with ThreadPoolExecutor(max_workers=judge_workers) as executor:
+                futures = [executor.submit(judge_one, item) for item in llm_candidates]
+                for i, future in enumerate(as_completed(futures), 1):
+                    pairs.append(future.result())
+                    llm_judged += 1
+                    if i % 10 == 0 or i == len(llm_candidates):
+                        logger.info(
+                            "已裁决 %s/%s 个候选对 (fast=%s, llm=%s/%s, workers=%s)",
+                            fast_path_count + i,
+                            len(candidates),
+                            fast_path_count,
+                            i,
+                            len(llm_candidates),
+                            judge_workers,
+                        )
+
+    logger.info(
+        "裁决完成: 总候选=%s, fast_path=%s, llm=%s",
+        len(candidates),
+        fast_path_count,
+        llm_judged,
+    )
 
     # 3. 构建canonical questions
     canonical_questions, review_questions = judge.build_canonical_questions(questions, pairs)
@@ -105,4 +199,7 @@ def run_dedupe(
         "candidate_pairs": len(candidates),
         "canonical_count": len(canonical_questions),
         "review_count": len(review_questions),
+        "fast_path_pairs": fast_path_count,
+        "llm_judged_pairs": llm_judged,
+        "judge_workers": judge_workers,
     }

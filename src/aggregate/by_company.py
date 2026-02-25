@@ -5,6 +5,7 @@ from datetime import datetime
 import logging
 from collections import defaultdict
 from pathlib import Path
+import re
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +15,8 @@ from src.models import CanonicalQuestion
 
 logger = logging.getLogger(__name__)
 
+ILLEGAL_XLSX_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
 
 class JSONEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -22,6 +25,19 @@ class JSONEncoder(json.JSONEncoder):
         if isinstance(obj, datetime):
             return obj.isoformat()
         return super().default(obj)
+
+
+def _sanitize_for_excel(value: Any) -> Any:
+    if isinstance(value, str):
+        return ILLEGAL_XLSX_CHAR_RE.sub("", value)
+    return value
+
+
+def _sanitize_dataframe_for_excel(df: pd.DataFrame) -> pd.DataFrame:
+    obj_cols = df.select_dtypes(include=["object"]).columns
+    for col in obj_cols:
+        df[col] = df[col].map(_sanitize_for_excel)
+    return df
 
 
 def aggregate_by_company(
@@ -213,6 +229,7 @@ def generate_company_excel(
     df["_sort"] = df["高频标记"].map(freq_order)
     df = df.sort_values(["公司", "_sort", "出现次数"], ascending=[True, True, False])
     df = df.drop(columns=["_sort"])
+    df = _sanitize_dataframe_for_excel(df)
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         df.to_excel(writer, sheet_name="汇总", index=False)

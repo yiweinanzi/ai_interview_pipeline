@@ -21,6 +21,7 @@ logs/
 data/staging/
 data/processed/
 data/output/
+data/experiments/
 
 # OS / editor
 .DS_Store

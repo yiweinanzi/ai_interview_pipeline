@@ -221,12 +221,24 @@ class CandidateRecaller:
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         normalized = embeddings / (norms + 1e-8)
 
-        # 批量计算相似度
+        # 批量计算相似度；仅保留每个问题最相近的top-k候选，
+        # 避免全量O(n^2)枚举导致候选爆炸和长时间运行。
         for i in range(len(questions)):
             similarities = np.dot(normalized, normalized[i])
+            similarities[i] = -1.0
 
-            # 找到相似度超过阈值的
-            for j in range(i + 1, len(questions)):
+            if self.embedding_top_k > 0 and self.embedding_top_k < len(questions):
+                top_indices = np.argpartition(similarities, -self.embedding_top_k)[-self.embedding_top_k:]
+            else:
+                top_indices = np.arange(len(questions))
+
+            # 只在top-k候选中筛选超过阈值的pair
+            for j in top_indices:
+                if j <= i:
+                    continue
+                if similarities[j] < self.embedding_threshold:
+                    continue
+
                 key = (
                     min(questions[i].atomic_question_id, questions[j].atomic_question_id),
                     max(questions[i].atomic_question_id, questions[j].atomic_question_id),
@@ -234,7 +246,6 @@ class CandidateRecaller:
                 if key in seen:
                     continue
 
-                if similarities[j] >= self.embedding_threshold:
-                    pairs.append((questions[i].atomic_question_id, questions[j].atomic_question_id))
+                pairs.append((questions[i].atomic_question_id, questions[j].atomic_question_id))
 
         return pairs

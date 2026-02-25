@@ -110,6 +110,13 @@ class QuestionExtractor:
         self.client = client or get_client()
         self.enable_coverage = enable_coverage
         self.prompt_version = "v1.0"
+        self.max_extract_depth = 2
+        self.max_coverage_depth = 1
+        self.min_split_len = 1200
+        # 对本地vLLM（如Qwen3-8B, max context=8192）保守设置输出上限，
+        # 避免 input_tokens + max_tokens 超限触发400。
+        self.max_extract_tokens = settings.extract_max_tokens
+        self.max_coverage_tokens = settings.coverage_max_tokens
 
     def extract_questions(self, chunk: TextChunk) -> list[AtomicQuestion]:
         """从chunk中抽取问题
@@ -150,20 +157,46 @@ class QuestionExtractor:
 
     def _extract_first_pass(self, text: str) -> list[ExtractedQuestion]:
         """第一轮抽取"""
-        user_prompt = f"## 原文\n\n{text}"
+        return self._extract_first_pass_with_split(text, depth=0)
 
+    def _extract_first_pass_with_split(
+        self,
+        text: str,
+        depth: int,
+    ) -> list[ExtractedQuestion]:
+        """第一轮抽取（支持失败后拆分重试）"""
         try:
-            result = self.client.call_json(
-                SYSTEM_PROMPT_EXTRACT,
-                user_prompt,
-                response_model=ExtractionResult,
-                temperature=0.0,
-                max_tokens=6144,
-            )
-            return [ExtractedQuestion(**q) for q in result.get("questions", [])]
+            return self._extract_first_pass_once(text)
         except Exception as e:
             logger.error(f"抽取问题失败: {e}")
-            return []
+
+            if depth >= self.max_extract_depth or len(text) < self.min_split_len:
+                return []
+
+            parts = self._split_text_for_retry(text)
+            if len(parts) <= 1:
+                return []
+
+            logger.warning(
+                f"抽取失败，拆分重试: depth={depth + 1}, parts={len(parts)}"
+            )
+            merged: list[ExtractedQuestion] = []
+            for part in parts:
+                merged.extend(self._extract_first_pass_with_split(part, depth + 1))
+            return self._dedupe_extracted_questions(merged)
+
+    def _extract_first_pass_once(self, text: str) -> list[ExtractedQuestion]:
+        """第一轮抽取（单次调用）"""
+        user_prompt = f"## 原文\n\n{text}"
+
+        result = self.client.call_json(
+            SYSTEM_PROMPT_EXTRACT,
+            user_prompt,
+            response_model=ExtractionResult,
+            temperature=0.0,
+            max_tokens=self.max_extract_tokens,
+        )
+        return [ExtractedQuestion(**q) for q in result.get("questions", [])]
 
     def _coverage_check(
         self,
@@ -171,6 +204,48 @@ class QuestionExtractor:
         extracted: list[ExtractedQuestion],
     ) -> list[ExtractedQuestion]:
         """补漏检查"""
+        return self._coverage_check_with_split(text, extracted, depth=0)
+
+    def _coverage_check_with_split(
+        self,
+        text: str,
+        extracted: list[ExtractedQuestion],
+        depth: int,
+    ) -> list[ExtractedQuestion]:
+        """补漏检查（支持失败后拆分重试）"""
+        try:
+            return self._coverage_check_once(text, extracted)
+        except Exception as e:
+            logger.error(f"补漏检查失败: {e}")
+
+            if depth >= self.max_coverage_depth or len(text) < self.min_split_len:
+                return []
+
+            parts = self._split_text_for_retry(text)
+            if len(parts) <= 1:
+                return []
+
+            logger.warning(
+                f"补漏失败，拆分重试: depth={depth + 1}, parts={len(parts)}"
+            )
+            merged: list[ExtractedQuestion] = []
+            for part in parts:
+                part_extracted = self._filter_extracted_for_text(extracted, part)
+                merged.extend(
+                    self._coverage_check_with_split(
+                        part,
+                        part_extracted,
+                        depth + 1,
+                    )
+                )
+            return self._dedupe_extracted_questions(merged)
+
+    def _coverage_check_once(
+        self,
+        text: str,
+        extracted: list[ExtractedQuestion],
+    ) -> list[ExtractedQuestion]:
+        """补漏检查（单次调用）"""
         # 构建已抽取问题列表
         extracted_text = "\n".join([
             f"- {q.question_text}"
@@ -185,28 +260,80 @@ class QuestionExtractor:
 
 {extracted_text}
 """
-        try:
-            from src.models.schemas import CoverageCheckResult, MissedQuestion
+        from src.models.schemas import CoverageCheckResult, MissedQuestion
 
-            result = self.client.call_json(
-                SYSTEM_PROMPT_COVERAGE,
-                user_prompt,
-                response_model=CoverageCheckResult,
-                temperature=0.0,
-                max_tokens=6144,
-            )
+        result = self.client.call_json(
+            SYSTEM_PROMPT_COVERAGE,
+            user_prompt,
+            response_model=CoverageCheckResult,
+            temperature=0.0,
+            max_tokens=self.max_coverage_tokens,
+        )
 
-            missed = []
-            for q in result.get("missed_questions", []):
-                missed.append(ExtractedQuestion(
-                    question_text=q.get("question_text", ""),
-                    question_type=q.get("question_type", "main"),
-                    evidence_span=q.get("evidence_span", ""),
-                ))
-            return missed
-        except Exception as e:
-            logger.error(f"补漏检查失败: {e}")
-            return []
+        missed = []
+        for q in result.get("missed_questions", []):
+            missed.append(ExtractedQuestion(
+                question_text=q.get("question_text", ""),
+                question_type=q.get("question_type", "main"),
+                evidence_span=q.get("evidence_span", ""),
+            ))
+        return missed
+
+    def _dedupe_extracted_questions(
+        self,
+        questions: list[ExtractedQuestion],
+    ) -> list[ExtractedQuestion]:
+        """按问题文本去重，保留首次出现"""
+        seen: set[str] = set()
+        deduped: list[ExtractedQuestion] = []
+        for q in questions:
+            key = q.question_text.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            deduped.append(q)
+        return deduped
+
+    def _split_text_for_retry(self, text: str) -> list[str]:
+        """将过长文本拆为两段，降低单次输出过长风险"""
+        paragraphs = [p for p in text.split("\n\n") if p.strip()]
+        if len(paragraphs) >= 2:
+            mid = len(paragraphs) // 2
+            left = "\n\n".join(paragraphs[:mid]).strip()
+            right = "\n\n".join(paragraphs[mid:]).strip()
+            if left and right:
+                return [left, right]
+
+        mid = len(text) // 2
+        split_pos = text.rfind("\n", 0, mid)
+        if split_pos <= 0:
+            split_pos = mid
+        left = text[:split_pos].strip()
+        right = text[split_pos:].strip()
+        if left and right:
+            return [left, right]
+        return [text]
+
+    def _filter_extracted_for_text(
+        self,
+        extracted: list[ExtractedQuestion],
+        text: str,
+    ) -> list[ExtractedQuestion]:
+        """为拆分后的子文本过滤对应已抽取问题，避免prompt过长"""
+        filtered: list[ExtractedQuestion] = []
+        for q in extracted:
+            q_text = q.question_text.strip()
+            e_text = (q.evidence_span or "").strip()
+            if q_text and q_text[:20] in text:
+                filtered.append(q)
+                continue
+            if e_text and e_text[:20] in text:
+                filtered.append(q)
+
+        # 若无法过滤到匹配项，保留前50条作为保守兜底
+        if not filtered:
+            return extracted[:50]
+        return filtered
 
     def _create_atomic_question(
         self,

@@ -71,6 +71,12 @@ class DeepSeekClient:
         self.total_tokens = 0
         self.cache_hits = 0
         self.fallback_calls = 0
+        self.primary_disabled = False
+        self.primary_bad_request_count = 0
+        self.primary_400_disable_threshold = max(
+            1,
+            settings.llm_primary_400_disable_threshold,
+        )
         self.errors: dict[str, int] = {}
 
     @retry(
@@ -161,6 +167,8 @@ class DeepSeekClient:
             if json_mode and not content:
                 logger.warning("JSON模式返回空内容，准备重试")
                 raise ValueError("Empty JSON response")
+            if not is_fallback:
+                self.primary_bad_request_count = 0
             return content or ""
 
         except Exception as e:
@@ -206,6 +214,14 @@ class DeepSeekClient:
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
+        if self.primary_disabled and self._fallback_client is not None:
+            return self._call_api_fallback(
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                json_mode=json_mode,
+                use_reasoner=use_reasoner,
+            )
         try:
             return self._call_api(
                 messages,
@@ -257,6 +273,15 @@ class DeepSeekClient:
             {"role": "user", "content": user_prompt},
         ]
 
+        if self.primary_disabled and self._fallback_client is not None:
+            return self._call_json_with_fallback_only(
+                messages=messages,
+                response_model=response_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                use_reasoner=use_reasoner,
+            )
+
         for attempt in range(1, parse_attempts + 1):
             try:
                 content = self._call_api(
@@ -268,6 +293,15 @@ class DeepSeekClient:
                 )
             except Exception as e:
                 last_error = e
+                status_code = getattr(e, "status_code", None)
+                # 对于确定性请求错误（如400/413/422），直接走fallback，避免无意义重试
+                if status_code in (400, 413, 422):
+                    if status_code == 400:
+                        self._record_primary_bad_request()
+                    logger.warning(
+                        f"主LLM返回{status_code}，直接切换fallback"
+                    )
+                    break
                 if attempt < parse_attempts:
                     logger.warning(f"主LLM请求失败，重试中 ({attempt}/{parse_attempts})")
                 continue
@@ -322,6 +356,56 @@ class DeepSeekClient:
         logger.error(f"JSON解析失败: {last_error}\n原始内容: {last_content[:500]}")
         raise ValueError(f"JSON解析失败: {last_error}") from last_error
 
+    def _call_json_with_fallback_only(
+        self,
+        *,
+        messages: list[dict[str, str]],
+        response_model: type[BaseModel] | None,
+        temperature: float,
+        max_tokens: int,
+        use_reasoner: bool,
+    ) -> dict[str, Any]:
+        parse_attempts = 3
+        last_error: Exception | None = None
+        last_content = ""
+
+        for attempt in range(1, parse_attempts + 1):
+            try:
+                content = self._call_api_fallback(
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    json_mode=True,
+                    use_reasoner=use_reasoner,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt < parse_attempts:
+                    logger.warning(
+                        f"fallback请求失败，重试中 ({attempt}/{parse_attempts})"
+                    )
+                continue
+
+            last_content = content
+            data = self._try_parse_json(content)
+            if data is not None:
+                validated = self._validate_json_data(data, response_model)
+                if validated is not None:
+                    return validated
+                last_error = ValueError("fallback JSON结构校验失败")
+            else:
+                last_error = ValueError("fallback JSON解析失败")
+
+            if attempt < parse_attempts:
+                logger.warning(
+                    f"fallback JSON解析/校验失败，重试中 ({attempt}/{parse_attempts})"
+                )
+
+        logger.error(
+            f"JSON解析失败: {last_error}\n原始内容: {last_content[:500]}"
+        )
+        raise ValueError(f"JSON解析失败: {last_error}") from last_error
+
     def _validate_json_data(
         self,
         data: dict[str, Any],
@@ -337,10 +421,19 @@ class DeepSeekClient:
 
     def _try_parse_json(self, content: str) -> dict[str, Any] | None:
         """尝试解析JSON，支持对常见格式问题进行清洗"""
-        candidates = [content, self._sanitize_json_text(content)]
+        sanitized = self._sanitize_json_text(content)
+        repaired = self._repair_json_text(sanitized)
+        candidates = [content, sanitized, repaired]
+
+        # 对尾部被截断的响应，逐步裁剪并修复重试
+        if repaired:
+            for cut in (120, 240, 480, 960):
+                if len(repaired) > cut:
+                    candidates.append(self._repair_json_text(repaired[:-cut]))
+
         seen = set()
 
-        for candidate in candidates:
+        for i, candidate in enumerate(candidates):
             if not candidate:
                 continue
             if candidate in seen:
@@ -349,6 +442,8 @@ class DeepSeekClient:
             try:
                 data = json.loads(candidate)
                 if isinstance(data, dict):
+                    if i > 0:
+                        logger.warning("JSON解析通过容错修复路径恢复")
                     return data
             except json.JSONDecodeError:
                 continue
@@ -372,11 +467,100 @@ class DeepSeekClient:
         text = re.sub(r",\s*([}\]])", r"\1", text)
         return text.strip()
 
+    def _repair_json_text(self, content: str) -> str:
+        """修复常见的截断/格式异常JSON"""
+        text = (content or "").strip()
+        if not text:
+            return ""
+
+        # 去除不可见控制字符（保留换行/回车/制表）
+        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
+
+        # 移除明显未完成的尾部字段
+        for _ in range(3):
+            new_text = re.sub(r',\s*"[^"]*"\s*:\s*[^,\}\]]*$', "", text, flags=re.S)
+            new_text = re.sub(r'"[^"]*"\s*:\s*[^,\}\]]*$', "", new_text, flags=re.S)
+            new_text = re.sub(r",\s*$", "", new_text)
+            if new_text == text:
+                break
+            text = new_text
+
+        # 如果字符串引号不平衡，优先裁到最近结构边界
+        if self._has_unbalanced_quotes(text):
+            last_boundary = max(text.rfind("}"), text.rfind("]"), text.rfind(","))
+            if last_boundary > 0:
+                text = text[: last_boundary + 1]
+
+        text = self._close_json_delimiters(text)
+        text = re.sub(r",\s*([}\]])", r"\1", text)
+        return text.strip()
+
+    def _has_unbalanced_quotes(self, text: str) -> bool:
+        escaped = False
+        in_string = False
+        for ch in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+            else:
+                if ch == '"':
+                    in_string = True
+        return in_string
+
+    def _close_json_delimiters(self, text: str) -> str:
+        stack: list[str] = []
+        escaped = False
+        in_string = False
+
+        for ch in text:
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+            elif ch in "{[":
+                stack.append(ch)
+            elif ch == "}" and stack and stack[-1] == "{":
+                stack.pop()
+            elif ch == "]" and stack and stack[-1] == "[":
+                stack.pop()
+
+        if in_string:
+            text += '"'
+
+        for opener in reversed(stack):
+            text += "}" if opener == "{" else "]"
+        return text
+
+    def _record_primary_bad_request(self) -> None:
+        self.primary_bad_request_count += 1
+        if (
+            not self.primary_disabled
+            and self._fallback_client is not None
+            and self.primary_bad_request_count >= self.primary_400_disable_threshold
+        ):
+            self.primary_disabled = True
+            logger.warning(
+                "主LLM连续400达到阈值，后续直接使用fallback"
+            )
+
     def get_stats(self) -> dict[str, Any]:
         """获取调用统计"""
         return {
             "total_calls": self.total_calls,
             "fallback_calls": self.fallback_calls,
+            "primary_disabled": self.primary_disabled,
+            "primary_bad_request_count": self.primary_bad_request_count,
             "total_tokens": self.total_tokens,
             "cache_hits": self.cache_hits,
             "errors": self.errors,

@@ -1,9 +1,11 @@
 """知识点分类模块"""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 from datetime import datetime
 import logging
 from pathlib import Path
+import threading
 from typing import Any
 from uuid import UUID
 
@@ -161,25 +163,59 @@ def run_classify(
 
     logger.info(f"加载 {len(questions)} 个问题")
 
-    # 分类
+    # 分类（支持并发）
     total_questions = len(questions)
-    classified = []
+    classified: list[CanonicalQuestion] = []
     tag_stats: dict[str, int] = {}
+    workers = max(1, settings.classify_workers)
 
-    for i, question in enumerate(questions):
-        result = classifier.classify(question)
+    if workers == 1 or total_questions <= 1:
+        for i, question in enumerate(questions):
+            result = classifier.classify(question)
+            question.primary_tag = result.primary_tag
+            question.secondary_tags = result.secondary_tags
+            classified.append(question)
+            tag_stats[result.primary_tag] = tag_stats.get(result.primary_tag, 0) + 1
+            if (i + 1) % 10 == 0 or (i + 1) == total_questions:
+                logger.info(f"已分类 {i + 1}/{total_questions} 个问题")
+    else:
+        local_ctx = threading.local()
+        classified_slots: list[CanonicalQuestion | None] = [None] * total_questions
 
-        # 更新问题对象的分类信息
-        question.primary_tag = result.primary_tag
-        question.secondary_tags = result.secondary_tags
+        def get_thread_classifier() -> KnowledgeClassifier:
+            inst = getattr(local_ctx, "classifier", None)
+            if inst is None:
+                inst = KnowledgeClassifier()
+                local_ctx.classifier = inst
+            return inst
 
-        classified.append(question)
+        def classify_one(item: tuple[int, CanonicalQuestion]) -> tuple[int, ClassifiedQuestion]:
+            idx, question = item
+            result = get_thread_classifier().classify(question)
+            return idx, result
 
-        # 统计
-        tag_stats[result.primary_tag] = tag_stats.get(result.primary_tag, 0) + 1
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(classify_one, (i, q))
+                for i, q in enumerate(questions)
+            ]
+            for done, future in enumerate(as_completed(futures), 1):
+                idx, result = future.result()
+                question = questions[idx]
+                question.primary_tag = result.primary_tag
+                question.secondary_tags = result.secondary_tags
+                classified_slots[idx] = question
+                tag_stats[result.primary_tag] = tag_stats.get(result.primary_tag, 0) + 1
 
-        if (i + 1) % 10 == 0:
-            logger.info(f"已分类 {i + 1}/{total_questions} 个问题")
+                if done % 20 == 0 or done == total_questions:
+                    logger.info(
+                        "已分类 %s/%s 个问题 (workers=%s)",
+                        done,
+                        total_questions,
+                        workers,
+                    )
+
+        classified = [q for q in classified_slots if q is not None]
 
     # 写入输出
     with open(output_file, "w", encoding="utf-8") as f:

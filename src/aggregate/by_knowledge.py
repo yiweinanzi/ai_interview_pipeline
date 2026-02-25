@@ -4,6 +4,7 @@ import json
 import logging
 from collections import defaultdict
 from pathlib import Path
+import re
 from typing import Any
 from uuid import UUID
 
@@ -13,6 +14,21 @@ import yaml
 from src.models import CanonicalQuestion
 
 logger = logging.getLogger(__name__)
+
+ILLEGAL_XLSX_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+
+def _sanitize_for_excel(value: Any) -> Any:
+    if isinstance(value, str):
+        return ILLEGAL_XLSX_CHAR_RE.sub("", value)
+    return value
+
+
+def _sanitize_dataframe_for_excel(df: pd.DataFrame) -> pd.DataFrame:
+    obj_cols = df.select_dtypes(include=["object"]).columns
+    for col in obj_cols:
+        df[col] = df[col].map(_sanitize_for_excel)
+    return df
 
 
 def aggregate_by_knowledge(
@@ -235,6 +251,7 @@ def generate_knowledge_excel(
     df["_sort"] = df["高频标记"].map(freq_order)
     df = df.sort_values(["_sort", "出现次数"], ascending=[True, False])
     df = df.drop(columns=["_sort"])
+    df = _sanitize_dataframe_for_excel(df)
 
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         # 汇总表

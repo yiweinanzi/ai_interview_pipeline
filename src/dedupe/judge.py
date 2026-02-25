@@ -126,6 +126,8 @@ class DedupeJudge:
                 SYSTEM_PROMPT_DEDUPE,
                 user_prompt,
                 response_model=DedupeJudgeResult,
+                # 裁决结果结构固定且较短，限制输出长度可显著降低时延/解析失败概率
+                max_tokens=512,
             )
 
             is_duplicate = result.get("is_duplicate", False)
@@ -190,6 +192,29 @@ class DedupeJudge:
             if q.atomic_question_id not in uf.parent:
                 clusters[q.atomic_question_id] = [q.atomic_question_id]
 
+        # 预计算：复核成员索引 + canonical候选索引，避免每个cluster重复扫描全部pairs
+        review_member_ids: set[UUID] = set()
+        canonical_hint_by_member: dict[UUID, str] = {}
+        for pair in pairs:
+            if pair.review_flag:
+                review_member_ids.add(pair.qid_a)
+                review_member_ids.add(pair.qid_b)
+
+            if (
+                pair.canonical_question_candidate
+                and pair.llm_is_duplicate
+                and pair.llm_confidence is not None
+                and pair.llm_confidence >= self.confidence_high
+            ):
+                canonical_hint_by_member.setdefault(
+                    pair.qid_a,
+                    pair.canonical_question_candidate,
+                )
+                canonical_hint_by_member.setdefault(
+                    pair.qid_b,
+                    pair.canonical_question_candidate,
+                )
+
         # 构建canonical questions
         canonical_questions = []
         review_questions = []
@@ -200,11 +225,18 @@ class DedupeJudge:
                 continue
 
             # 找到最佳canonical表述
-            canonical_text = self._select_canonical_text(
-                member_questions,
-                pairs,
-                member_ids=set(members),
-            )
+            canonical_text = ""
+            for mid in members:
+                hint = canonical_hint_by_member.get(mid)
+                if hint:
+                    canonical_text = hint
+                    break
+            if not canonical_text:
+                canonical_text = self._select_canonical_text(
+                    member_questions,
+                    [],
+                    member_ids=set(members),
+                )
 
             # 收集公司信息
             companies = list(set(
@@ -232,11 +264,7 @@ class DedupeJudge:
             )
 
             # 检查是否需要复核（低置信度合并）
-            needs_review = any(
-                pair.review_flag and
-                (pair.qid_a in members or pair.qid_b in members)
-                for pair in pairs
-            )
+            needs_review = any(mid in review_member_ids for mid in members)
 
             if needs_review:
                 review_questions.append(cq)

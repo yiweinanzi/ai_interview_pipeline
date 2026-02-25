@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     llm_fallback_base_url: str = "https://api.deepseek.com"
     llm_fallback_model: str = "deepseek-chat"
     llm_fallback_reasoner_model: str = "deepseek-reasoner"
+    llm_primary_400_disable_threshold: int = 20
 
     # 向量嵌入配置
     embedding_model: str = "BAAI/bge-m3"
@@ -40,6 +41,8 @@ class Settings(BaseSettings):
     max_retries: int = 3
     retry_delay: float = 1.0
     request_timeout: int = 600
+    extract_max_tokens: int = 2048
+    coverage_max_tokens: int = 2048
 
     # 切分配置
     chunk_size: int = 3000
@@ -49,6 +52,10 @@ class Settings(BaseSettings):
     similarity_threshold: float = 0.85
     dedupe_confidence_low: float = 0.55
     dedupe_confidence_high: float = 0.8
+    dedupe_embedding_top_k: int = 8
+    dedupe_judge_workers: int = 8
+    dedupe_fast_path_exact_normalized: bool = True
+    classify_workers: int = 8
 
     @property
     def project_root(self) -> Path:
